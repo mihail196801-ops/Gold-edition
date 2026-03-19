@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Python Messenger</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; margin: 0; background: #1a1a1a; color: #fff; display: flex; height: 100vh; }
+        
+        /* Сайдбар */
+        .sidebar { width: 250px; background: #252525; padding: 20px; border-right: 1px solid #333; display: flex; flex-direction: column; }
+        .sidebar h2 { margin-top: 0; font-size: 18px; color: #4CAF50; }
+        .user-list { list-style: none; padding: 0; }
+        .user-list li { padding: 8px; background: #333; margin-bottom: 5px; border-radius: 4px; font-size: 14px; }
+        
+        /* Основная часть */
+        .main { flex: 1; display: flex; flex-direction: column; }
+        
+        /* Видео */
+        .video-container { display: flex; gap: 10px; padding: 20px; background: #000; height: 250px; }
+        video { flex: 1; background: #111; border-radius: 8px; object-fit: cover; max-height: 100%; }
+        #remoteVideo { border: 2px solid #4CAF50; }
+        
+        /* Чат */
+        .chat-area { flex: 1; display: flex; flex-direction: column; padding: 20px; overflow: hidden; }
+        #messages { flex: 1; overflow-y: auto; padding: 10px; background: #2a2a2a; border-radius: 8px; margin-bottom: 15px; }
+        .message { margin-bottom: 10px; padding: 8px 12px; border-radius: 8px; max-width: 70%; }
+        .message.my { background: #4CAF50; align-self: flex-end; margin-left: auto; }
+        .message.other { background: #333; align-self: flex-start; }
+        .message.system { background: transparent; color: #888; text-align: center; max-width: 100%; font-size: 12px; }
+        .meta { font-size: 10px; opacity: 0.7; margin-bottom: 4px; display: block; }
+        
+        /* Ввод */
+        .input-area { display: flex; gap: 10px; }
+        input { flex: 1; padding: 12px; border-radius: 6px; border: none; background: #333; color: white; }
+        button { padding: 12px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
+        .btn-join { background: #4CAF50; color: white; }
+        .btn-call { background: #2196F3; color: white; }
+        .btn-send { background: #4CAF50; color: white; }
+        .btn-leave { background: #f44336; color: white; margin-top: 10px;}
+
+        /* Экран входа */
+        #login-screen { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 100; display: flex; justify-content: center; align-items: center; }
+        .login-box { background: #252525; padding: 40px; border-radius: 10px; text-align: center; }
+        .login-box input { margin-bottom: 10px; display: block; width: 200px; }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+
+    <!-- Экран входа -->
+    <div id="login-screen">
+        <div class="login-box">
+            <h2>Вход в мессенджер</h2>
+            <input type="text" id="username" placeholder="Ваше имя">
+            <input type="text" id="room" placeholder="Название комнаты">
+            <button class="btn-join" onclick="joinRoom()">Войти</button>
+        </div>
+    </div>
+
+    <!-- Сайдбар -->
+    <div class="sidebar">
+        <h2>Участники</h2>
+        <ul class="user-list" id="userList"></ul>
+        <button class="btn-leave" onclick="leaveRoom()">Выйти</button>
+    </div>
+
+    <!-- Основной контент -->
+    <div class="main">
+        <div class="video-container">
+            <video id="localVideo" autoplay muted></video>
+            <video id="remoteVideo" autoplay></video>
+        </div>
+        
+        <div class="chat-area">
+            <div id="messages"></div>
+            <div class="input-area">
+                <input type="text" id="msgInput" placeholder="Сообщение..." onkeypress="handleEnter(event)">
+                <button class="btn-send" onclick="sendMessage()">➤</button>
+            </div>
+            <button class="btn-call" style="margin-top:10px" onclick="createOffer()">📞 Позвонить</button>
+        </div>
+    </div>
+
+    <script>
+        // !!! ЗАМЕНИ НА СВОЙ IP ИЛИ ДОМЕН !!!
+        const SERVER_URL = 'http://YOUR_IP_ADDRESS:5000'; 
+        const socket = io(SERVER_URL);
+
+        let localStream;
+        let peerConnection;
+        let username;
+        let room;
+        let isCaller = false;
+
+        // STUN серверы Google (бесплатные)
+        const servers = {
+            iceServers: [
+                { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }
+            ]
+        };
+
+        async function joinRoom() {
+            username = document.getElementById('username').value;
+            room = document.getElementById('room').value;
+            if (!username || !room) return alert('Заполните все поля!');
+
+            document.getElementById('login-screen').classList.add('hidden');
+            socket.emit('join', { username, room });
+
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                document.getElementById('localVideo').srcObject = localStream;
+            } catch (err) {
+                alert('Нет доступа к камере!');
+                console.error(err);
+            }
+        }
+
+        function leaveRoom() {
+            socket.emit('leave', { username, room });
+            location.reload();
+        }
+
+        function sendMessage() {
+            const text = document.getElementById('msgInput').value;
+            if (text.trim()) {
+                socket.emit('send_message', { username, room, text });
+                document.getElementById('msgInput').value = '';
+            }
+        }
+
+        function handleEnter(e) {
+            if (e.key === 'Enter') sendMessage();
+        }
+
+        function addMessage(data, type) {
+            const div = document.createElement('div');
+            div.className = `message ${type}`;
+            const time = data.time || new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            const name = data.username || 'Система';
+            
+            if (type === 'system') {
+                div.innerHTML = `<span class="meta">${time}</span> ${data.msg}`;
+            } else {
+                const isMe = data.username === username;
+                div.innerHTML = `<span class="meta">${isMe ? 'Вы' : name} • ${time}</span> ${data.text}`;
+            }
+            const container = document.getElementById('messages');
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // --- Socket Events ---
+
+        socket.on('user_list', data => {
+            const list = document.getElementById('userList');
+            list.innerHTML = '';
+            data.users.forEach(user => {
+                const li = document.createElement('li');
+                li.textContent = user;
+                list.appendChild(li);
+            });
+        });
+
+        socket.on('receive_message', data => {
+            addMessage(data, data.username === username ? 'my' : 'other');
+        });
+
+        socket.on('status', data => {
+            addMessage(data, 'system');
+        });
+
+        // --- WebRTC Logic ---
+
+        async function createOffer() {
+            if (!peerConnection) initPeerConnection();
+            isCaller = true;
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            socket.emit('offer', { offer, room });
+            addMessage({msg: 'Вы позвонили...', time: ''}, 'system');
+        }
+
+        function initPeerConnection() {
+            peerConnection = new RTCPeerConnection(servers);
+            
+            localStream.getTracks().forEach(track => {
+                if(peerConnection) peerConnection.addTrack(track, localStream);
+            });
+
+            peerConnection.ontrack = event => {
+                document.getElementById('remoteVideo').srcObject = event.streams[0];
+            };
+
+            peerConnection.onicecandidate = event => {
+                if (event.candidate) {
+                    socket.emit('candidate', { candidate: event.candidate, room });
+                }
+            };
+        }
+
+        socket.on('offer', async data => {
+            if (!peerConnection) initPeerConnection();
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            socket.emit('answer', { answer, room });
+        });
+
+        socket.on('answer', async data => {
+            if (peerConnection) await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+        });
+
+        socket.on('candidate', async data => {
+            if (peerConnection) {
+                try {
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+                } catch (e) { console.error(e); }
+            }
+        });
+    </script>
+</body>
+</html>
