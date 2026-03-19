@@ -89,3 +89,11 @@ def on_candidate(data):
 if __name__ == '__main__':
     # host='0.0.0.0' делает сервер доступным для внешней сети
     socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    from pyngrok import ngrok
+
+# Создаем туннель
+public_url = ngrok.connect(5000)
+print(f"🌐 Твой публичный URL: {public_url}")
+
+# Запускаем сервер
+socketio.run(app, host='0.0.0.0', port=5000, debug=False)
